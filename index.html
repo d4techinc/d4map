@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D4 Tech – Map'Em</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.min.css">
+<style>
+  :root { --bar:#273244; --accent:#ff6a00; --text:#111827; --muted:#6b7280; --panel:#ffffff; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; font-family: "Open Sans", Segoe UI, Arial, sans-serif; color:var(--text); background:#e5e7eb; }
+  #bar { height:48px; background:var(--bar); color:#fff; display:flex; align-items:center; gap:16px; padding:0 16px; }
+  #bar b { color:var(--accent); font-size:18px; }
+  #bar .stat { font-size:14px; opacity:.9; }
+  #bar .spacer { flex:1; }
+  #bar button { background:var(--accent); color:#fff; border:0; border-radius:20px; padding:6px 14px; font-weight:600; cursor:pointer; }
+  #map { position:absolute; top:48px; left:0; right:0; bottom:0; }
+  #legend { background:var(--panel); padding:10px 12px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.25); font-size:13px; max-height:60vh; overflow:auto; min-width:170px; }
+  #legend h4 { margin:0 0 6px; font-size:13px; }
+  #legend label { display:flex; align-items:center; gap:8px; padding:3px 0; cursor:pointer; white-space:nowrap; }
+  #legend .sw { width:14px; height:14px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #9ca3af; flex:none; }
+  #legend .n { color:var(--muted); margin-left:auto; padding-left:10px; }
+  #legend .tools { margin-top:6px; font-size:12px; }
+  #legend .tools a { color:#2563eb; cursor:pointer; margin-right:10px; }
+  .pin { position:relative; }
+  .pin .badge { position:absolute; top:-6px; right:-8px; background:#111827; color:#fff; font-size:11px; font-weight:700; border-radius:10px; padding:1px 5px; border:2px solid #fff; }
+  .pop { font-size:13px; line-height:1.45; min-width:200px; }
+  .pop .wrt { font-weight:700; font-size:14px; word-break:break-word; }
+  .pop .row { color:var(--muted); }
+  .pop .row span { color:var(--text); }
+  .pop a { display:inline-block; margin-top:6px; margin-right:10px; color:#2563eb; font-weight:600; text-decoration:none; }
+  #overlay { position:fixed; inset:0; background:rgba(17,24,39,.6); display:none; align-items:center; justify-content:center; z-index:2000; }
+  #overlay .box { background:#fff; border-radius:10px; padding:22px; width:min(520px, calc(100% - 32px)); box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  #overlay h3 { margin:0 0 8px; }
+  #overlay p { margin:0 0 12px; color:var(--muted); font-size:14px; }
+  #overlay button { background:var(--accent); color:#fff; border:0; border-radius:20px; padding:10px 18px; font-weight:700; font-size:15px; cursor:pointer; }
+  #overlay textarea { width:100%; height:90px; margin-top:12px; font-family:monospace; font-size:12px; }
+  #overlay .err { color:#dc2626; font-size:13px; margin-top:8px; min-height:1em; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>D4 Map'Em</b>
+  <span class="stat" id="stat">No tickets loaded</span>
+  <span class="spacer"></span>
+  <button id="btnClip" title="Load tickets copied from the app">Load from clipboard</button>
+</div>
+<div id="map"></div>
+
+<div id="overlay">
+  <div class="box">
+    <h3>Load tickets</h3>
+    <p>Map'Em! copied your tickets. Click the button below (allow clipboard access if your browser asks).</p>
+    <button id="btnLoad">Load tickets from clipboard</button>
+    <textarea id="paste" placeholder="…or paste here (Ctrl+V)"></textarea>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+<script>
+// ---- Colors (same order as the app) ----
+var PAL = ["#0050FF","#FF8C00","#8B00FF","#00A000","#FF00C8","#FFE100","#00D5D5","#8B4513","#000000","#B8860B"];
+var RED = "#E00000", GREY = "#808080";
+function colorFor(c) {
+  if (c === "0") return RED;
+  var n = parseInt(c, 10);
+  if (isNaN(n) || n < 1) return GREY;
+  return PAL[(n - 1) % PAL.length];
+}
+
+// ---- Map + base layers ----
+var streets = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" });
+var satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, attribution: "Imagery &copy; Esri" });
+var outdoor = L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+  { maxZoom: 17, attribution: "&copy; OpenTopoMap (CC-BY-SA)" });
+
+// Keep the map on the USA (lower 48, small margin). Can't pan or zoom out past it.
+var USA = L.latLngBounds([[23.5, -127.5], [50.5, -65.0]]);
+var map = L.map("map", { layers: [streets], zoomControl: true, maxBounds: USA, maxBoundsViscosity: 1.0, worldCopyJump: false });
+map.setMinZoom(map.getBoundsZoom(USA, false));
+map.fitBounds(USA);
+window.addEventListener("resize", function () { map.setMinZoom(map.getBoundsZoom(USA, false)); });
+L.control.layers({ "Streets": streets, "Satellite": satellite, "Outdoor": outdoor }, null, { position: "topright" }).addTo(map);
+L.control.scale({ imperial: true, metric: false }).addTo(map);
+
+var cluster = L.markerClusterGroup({ disableClusteringAtZoom: 11, showCoverageOnHover: false, maxClusterRadius: 45 });
+map.addLayer(cluster);
+
+var legendCtl = L.control({ position: "bottomleft" });
+legendCtl.onAdd = function () { var d = L.DomUtil.create("div"); d.id = "legend"; d.style.display = "none";
+  L.DomEvent.disableClickPropagation(d); L.DomEvent.disableScrollPropagation(d); return d; };
+legendCtl.addTo(map);
+
+function esc(s) { return String(s).replace(/[&<>"']/g, function (ch) {
+  return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]; }); }
+
+function pinIcon(color, count) {
+  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="34" height="46" viewBox="0 0 34 46">' +
+    '<path d="M17 1C8.2 1 1 8.2 1 17c0 11.6 16 28 16 28s16-16.4 16-28C33 8.2 25.8 1 17 1z" fill="' + color +
+    '" stroke="#fff" stroke-width="2"/><circle cx="17" cy="17" r="6" fill="#fff" fill-opacity=".9"/></svg>';
+  var badge = count > 1 ? '<span class="badge">' + count + '</span>' : "";
+  return L.divIcon({ className: "pin", html: svg + badge, iconSize: [34, 46], iconAnchor: [17, 45], popupAnchor: [0, -40] });
+}
+
+// ---- Data format from the app ----
+// records separated by "|", fields by "~": lat ~ lon ~ colorCode ~ tech ~ WRTs(comma list) ~ count ~ description
+var groups = {};  // tech -> { color, markers: [], on: true }
+
+function parse(text) {
+  text = (text || "").trim();
+  if (!text) return [];
+  var out = [], bad = 0;
+  text.split("|").forEach(function (rec) {
+    var f = rec.split("~");
+    var lat = parseFloat(f[0]), lon = parseFloat(f[1]);
+    if (f.length < 7 || isNaN(lat) || isNaN(lon)) { bad++; return; }
+    out.push({ lat: lat, lon: lon, c: f[2], tech: (f[3] || "").trim() || "Unassigned",
+               wrts: f[4] || "", count: parseInt(f[5], 10) || 1, desc: f.slice(6).join(" ") });
+  });
+  if (bad) console.warn(bad + " record(s) could not be read");
+  out.bad = bad;
+  return out;
+}
+
+function render(sites) {
+  cluster.clearLayers(); groups = {};
+  if (!sites.length) { document.getElementById("stat").textContent = "No tickets loaded"; return; }
+  var bounds = [], tickets = 0;
+  sites.forEach(function (s) {
+    var color = colorFor(s.c);
+    var key = s.tech.toUpperCase();
+    if (!groups[key]) groups[key] = { name: s.tech, color: color, markers: [], tickets: 0, on: true };
+    var dir = "https://www.google.com/maps/dir/?api=1&destination=" + s.lat + "," + s.lon;
+    var html = '<div class="pop"><div class="wrt">' + esc(s.wrts.split(",").join(", ")) + '</div>' +
+      '<div class="row">Tech: <span>' + esc(s.tech) + '</span></div>' +
+      (s.count > 1 ? '<div class="row">Tickets at site: <span>' + s.count + '</span></div>' : "") +
+      (s.desc ? '<div class="row">Description: <span>' + esc(s.desc) + '</span></div>' : "") +
+      '<div class="row">Coords: <span>' + s.lat.toFixed(5) + ", " + s.lon.toFixed(5) + '</span></div>' +
+      '<a href="' + dir + '" target="_blank" rel="noopener">Directions</a>' +
+      '<a href="#" onclick="navigator.clipboard.writeText(\'' + esc(s.wrts).replace(/\\/g, "") + '\');this.textContent=\'Copied\';return false;">Copy WRT</a></div>';
+    var m = L.marker([s.lat, s.lon], { icon: pinIcon(color, s.count), title: s.wrts }).bindPopup(html);
+    groups[key].markers.push(m); groups[key].tickets += s.count; tickets += s.count;
+    cluster.addLayer(m); bounds.push([s.lat, s.lon]);
+  });
+  map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
+  document.getElementById("stat").textContent = sites.length + " site(s) · " + tickets + " ticket(s)" +
+    (sites.bad ? " · " + sites.bad + " unreadable" : "");
+  drawLegend();
+}
+
+function drawLegend() {
+  var el = document.getElementById("legend");
+  var keys = Object.keys(groups).sort(function (a, b) {
+    var ua = groups[a].color === RED, ub = groups[b].color === RED;
+    if (ua !== ub) return ua ? 1 : -1;
+    return a.localeCompare(b);
+  });
+  var h = "<h4>Techs</h4>";
+  keys.forEach(function (k) {
+    var g = groups[k];
+    h += '<label><input type="checkbox" data-k="' + esc(k) + '"' + (g.on ? " checked" : "") + '>' +
+         '<span class="sw" style="background:' + g.color + '"></span>' + esc(g.name) +
+         '<span class="n">' + g.tickets + '</span></label>';
+  });
+  h += '<div class="tools"><a id="lgAll">All</a><a id="lgNone">None</a></div>';
+  el.innerHTML = h; el.style.display = "block";
+  el.querySelectorAll("input").forEach(function (cb) {
+    cb.addEventListener("change", function () { toggle(cb.getAttribute("data-k"), cb.checked); });
+  });
+  document.getElementById("lgAll").onclick = function () { Object.keys(groups).forEach(function (k) { toggle(k, true); }); drawLegend(); };
+  document.getElementById("lgNone").onclick = function () { Object.keys(groups).forEach(function (k) { toggle(k, false); }); drawLegend(); };
+}
+
+function toggle(k, on) {
+  var g = groups[k]; if (!g || g.on === on) return;
+  g.on = on;
+  if (on) cluster.addLayers(g.markers); else cluster.removeLayers(g.markers);
+}
+
+// ---- Loading ----
+var overlay = document.getElementById("overlay"), err = document.getElementById("err");
+function showOverlay() { err.textContent = ""; document.getElementById("paste").value = ""; overlay.style.display = "flex"; }
+function loadText(t) {
+  var sites = parse(t);
+  if (!sites.length) { err.textContent = "No tickets found. Click Map'Em! in the app again, then retry."; return false; }
+  overlay.style.display = "none"; render(sites); return true;
+}
+document.getElementById("btnLoad").onclick = function () {
+  if (!navigator.clipboard || !navigator.clipboard.readText) { err.textContent = "Your browser blocked clipboard reading. Paste into the box instead."; return; }
+  navigator.clipboard.readText().then(loadText, function () { err.textContent = "Clipboard access was blocked. Paste into the box instead (Ctrl+V)."; });
+};
+document.getElementById("paste").addEventListener("input", function (e) { loadText(e.target.value); });
+document.getElementById("btnClip").onclick = showOverlay;
+overlay.addEventListener("click", function (e) { if (e.target === overlay && cluster.getLayers().length) overlay.style.display = "none"; });
+
+function fromHash() {
+  var h = location.hash || "";
+  if (h.indexOf("#d=") === 0) {
+    var raw = h.substring(3);
+    try { raw = decodeURIComponent(raw.replace(/\+/g, "%20")); } catch (e) { }
+    if (!loadText(raw)) showOverlay();
+  } else if (h.indexOf("#clip") === 0) {
+    showOverlay();
+  }
+}
+window.addEventListener("hashchange", fromHash);
+fromHash();
+</script>
+</body>
+</html>
