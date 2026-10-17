@@ -28,6 +28,8 @@
   .pin .badge { position:absolute; top:-6px; right:-8px; background:#111827; color:#fff; font-size:11px; font-weight:700; border-radius:10px; padding:1px 5px; border:2px solid #fff; }
   .pop { font-size:13px; line-height:1.45; min-width:200px; }
   .pop .wrt { font-weight:700; font-size:14px; word-break:break-word; }
+  .pop .tk { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:2px 0; }
+  .pop .tk a.open { margin:0; background:#ff6a00; color:#fff; border-radius:12px; padding:2px 10px; font-size:12px; }
   .pop .row { color:var(--muted); }
   .pop .row span { color:var(--text); }
   .pop a { display:inline-block; margin-top:6px; margin-right:10px; color:#2563eb; font-weight:600; text-decoration:none; }
@@ -63,6 +65,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
 <script>
 // ---- Colors (same order as the app) ----
+// ==== PASTE YOUR POWER APPS WEB LINK BETWEEN THE QUOTES ====
+var APP_LINK = "https://apps.powerapps.com/play/e/default-0225330d-2a2c-48e8-ab4f-6667e1e09057/a/d15eb05a-fa51-42af-9bc7-48a1b63c118f?tenantId=0225330d-2a2c-48e8-ab4f-6667e1e09057&hint=2815031c-741e-4ebc-8b26-4e9b46522c77&sourcetime=1792263596893";
+// ===========================================================
+function openLink(wrt) {
+  if (!APP_LINK || APP_LINK.indexOf("http") !== 0) return "";
+  return APP_LINK + (APP_LINK.indexOf("?") >= 0 ? "&" : "?") + "WRT=" + encodeURIComponent(wrt);
+}
+
 var PAL = ["#0050FF","#FF8C00","#8B00FF","#00A000","#FF00C8","#FFE100","#00D5D5","#8B4513","#000000","#B8860B"];
 var RED = "#E00000", GREY = "#808080";
 function colorFor(c) {
@@ -137,7 +147,12 @@ function render(sites) {
     var key = s.tech.toUpperCase();
     if (!groups[key]) groups[key] = { name: s.tech, color: color, markers: [], tickets: 0, on: true };
     var dir = "https://www.google.com/maps/dir/?api=1&destination=" + s.lat + "," + s.lon;
-    var html = '<div class="pop"><div class="wrt">' + esc(s.wrts.split(",").join(", ")) + '</div>' +
+    var tks = s.wrts.split(",").filter(function (w) { return w.trim(); }).map(function (w) {
+      var ol = openLink(w.trim());
+      return '<div class="tk"><span class="wrt">' + esc(w.trim()) + '</span>' +
+        (ol ? '<a class="open" href="' + esc(ol) + '" target="_blank" rel="noopener">Open ticket</a>' : '') + '</div>';
+    }).join("");
+    var html = '<div class="pop">' + tks +
       '<div class="row">Tech: <span>' + esc(s.tech) + '</span></div>' +
       (s.count > 1 ? '<div class="row">Tickets at site: <span>' + s.count + '</span></div>' : "") +
       (s.desc ? '<div class="row">Description: <span>' + esc(s.desc) + '</span></div>' : "") +
