@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D4 Tech – Ticket Photos</title>
+<style>
+  :root { --bar:#273244; --accent:#ff6a00; --bg:#111827; --card:#1f2937; --text:#f9fafb; --muted:#9ca3af; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-family:"Open Sans", Segoe UI, Arial, sans-serif; }
+  #bar { position:sticky; top:0; z-index:5; height:52px; background:var(--bar); display:flex; align-items:center; gap:16px; padding:0 16px; }
+  #bar b { color:var(--accent); font-size:18px; }
+  #bar .wrt { font-size:16px; font-weight:700; }
+  #bar .stat { color:var(--muted); font-size:14px; }
+  #grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px; padding:16px; }
+  .tile { position:relative; background:var(--card); border-radius:8px; overflow:hidden; aspect-ratio:4/3; cursor:zoom-in; border:2px solid transparent; }
+  .tile:hover { border-color:var(--accent); }
+  .tile img { width:100%; height:100%; object-fit:cover; display:block; }
+  .tile .num { position:absolute; left:8px; top:8px; background:rgba(0,0,0,.65); font-size:12px; font-weight:700; padding:2px 8px; border-radius:10px; }
+  .tile.err { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:13px; text-align:center; padding:12px; cursor:default; }
+  #empty { padding:60px 16px; text-align:center; color:var(--muted); font-size:16px; display:none; }
+
+  #lb { position:fixed; inset:0; background:rgba(0,0,0,.95); z-index:50; display:none; }
+  #lb.on { display:block; }
+  #lbWrap { position:absolute; inset:52px 0 0 0; overflow:auto; display:flex; align-items:center; justify-content:center; }
+  #lbImg { max-width:100%; max-height:100%; cursor:zoom-in; user-select:none; }
+  #lbWrap.zoom { display:block; }
+  #lbWrap.zoom #lbImg { max-width:none; max-height:none; cursor:zoom-out; }
+  #lbTop { position:absolute; top:0; left:0; right:0; height:52px; display:flex; align-items:center; gap:12px; padding:0 16px; background:rgba(17,24,39,.9); }
+  #lbTop .count { font-weight:700; }
+  #lbTop .sp { flex:1; }
+  #lbTop a, #lbTop button { background:#374151; color:#fff; border:0; border-radius:18px; padding:7px 14px; font-size:14px; font-weight:600; text-decoration:none; cursor:pointer; }
+  #lbTop a.dl { background:var(--accent); }
+  .nav { position:absolute; top:50%; transform:translateY(-50%); width:56px; height:80px; border:0; background:rgba(55,65,81,.7); color:#fff; font-size:34px; cursor:pointer; border-radius:8px; z-index:2; }
+  .nav:hover { background:var(--accent); }
+  #prev { left:10px; } #next { right:10px; }
+  #hint { position:absolute; bottom:12px; left:0; right:0; text-align:center; color:var(--muted); font-size:12px; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>D4 Photos</b>
+  <span class="wrt" id="wrt"></span>
+  <span class="stat" id="stat"></span>
+</div>
+<div id="grid"></div>
+<div id="empty">No photos for this ticket.</div>
+
+<div id="lb">
+  <div id="lbTop">
+    <span class="count" id="lbCount"></span>
+    <span class="sp"></span>
+    <button id="btnZoom">Zoom</button>
+    <a id="btnDl" class="dl" href="#" target="_blank" rel="noopener">Download</a>
+    <button id="btnClose">Close ✕</button>
+  </div>
+  <div id="lbWrap"><img id="lbImg" alt=""></div>
+  <button class="nav" id="prev" title="Previous">‹</button>
+  <button class="nav" id="next" title="Next">›</button>
+  <div id="hint">← → to move · click photo to zoom · Esc to close</div>
+</div>
+
+<script>
+// Hash format from the app:  #w=<WRT>&p=<link1|link2|...>
+function readHash() {
+  var h = (location.hash || "").replace(/^#/, "");
+  var out = { w: "", p: [] };
+  h.split("&").forEach(function (part) {
+    var i = part.indexOf("="); if (i < 0) return;
+    var k = part.substring(0, i), v = part.substring(i + 1);
+    try { v = decodeURIComponent(v.replace(/\+/g, "%20")); } catch (e) {}
+    if (k === "w") out.w = v.trim();
+    if (k === "p") out.p = v.split(/[|\r\n]+/).map(function (s) { return s.trim(); })
+                          .filter(function (s) { return /^https:\/\//i.test(s); });
+  });
+  return out;
+}
+// A SharePoint "anyone" link opens a viewer page; adding download=1 returns the photo file itself.
+function fileUrl(link) {
+  if (/download=1/i.test(link)) return link;
+  return link + (link.indexOf("?") >= 0 ? "&" : "?") + "download=1";
+}
+
+var photos = [], cur = 0;
+var grid = document.getElementById("grid"), lb = document.getElementById("lb"),
+    lbImg = document.getElementById("lbImg"), lbWrap = document.getElementById("lbWrap");
+
+function build() {
+  var d = readHash();
+  photos = d.p.map(fileUrl);
+  document.getElementById("wrt").textContent = d.w;
+  document.title = (d.w ? d.w + " – " : "") + "D4 Photos";
+  document.getElementById("stat").textContent = photos.length ? photos.length + " photo(s)" : "";
+  grid.innerHTML = "";
+  document.getElementById("empty").style.display = photos.length ? "none" : "block";
+  photos.forEach(function (src, i) {
+    var t = document.createElement("div"); t.className = "tile";
+    var img = document.createElement("img"); img.loading = "lazy"; img.alt = "Photo " + (i + 1); img.src = src;
+    img.onerror = function () { t.className = "tile err"; t.innerHTML = "Photo " + (i + 1) + " could not load.<br>The link may have expired."; };
+    var n = document.createElement("span"); n.className = "num"; n.textContent = i + 1;
+    t.appendChild(img); t.appendChild(n);
+    t.onclick = function () { if (t.className.indexOf("err") < 0) open(i); };
+    grid.appendChild(t);
+  });
+}
+
+function show() {
+  lbWrap.classList.remove("zoom");
+  lbImg.src = photos[cur];
+  document.getElementById("lbCount").textContent = (cur + 1) + " of " + photos.length;
+  document.getElementById("btnDl").href = photos[cur];
+  document.getElementById("prev").style.display = photos.length > 1 ? "" : "none";
+  document.getElementById("next").style.display = photos.length > 1 ? "" : "none";
+  // preload neighbours so arrows feel instant
+  [cur + 1, cur - 1].forEach(function (j) { if (photos.length > 1) { var p = new Image(); p.src = photos[(j + photos.length) % photos.length]; } });
+}
+function open(i) { cur = i; lb.classList.add("on"); show(); }
+function close() { lb.classList.remove("on"); lbImg.src = ""; }
+function step(d) { cur = (cur + d + photos.length) % photos.length; show(); }
+function zoom() { lbWrap.classList.toggle("zoom"); }
+
+document.getElementById("prev").onclick = function () { step(-1); };
+document.getElementById("next").onclick = function () { step(1); };
+document.getElementById("btnClose").onclick = close;
+document.getElementById("btnZoom").onclick = zoom;
+lbImg.onclick = zoom;
+document.addEventListener("keydown", function (e) {
+  if (!lb.classList.contains("on")) return;
+  if (e.key === "ArrowRight") step(1);
+  else if (e.key === "ArrowLeft") step(-1);
+  else if (e.key === "Escape") close();
+});
+// swipe on phones/tablets
+var sx = null;
+lbWrap.addEventListener("touchstart", function (e) { sx = e.touches[0].clientX; }, { passive: true });
+lbWrap.addEventListener("touchend", function (e) {
+  if (sx === null || lbWrap.classList.contains("zoom")) return;
+  var dx = e.changedTouches[0].clientX - sx; sx = null;
+  if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
+});
+
+window.addEventListener("hashchange", build);
+build();
+</script>
+</body>
+</html>
