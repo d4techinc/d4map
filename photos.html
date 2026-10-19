@@ -152,24 +152,50 @@ function build() {
   document.title = (d.w ? d.w + " – " : "") + "D4 Photos";
   document.getElementById("stat").textContent = photos.length + (photos.length === 1 ? " photo" : " photos");
   document.getElementById("btnFirst").style.display = photos.length ? "" : "none";
-  grid.innerHTML = ""; strip.innerHTML = "";
+  grid.innerHTML = ""; strip.innerHTML = ""; queue = [];
   document.getElementById("empty").style.display = photos.length ? "none" : "block";
   photos.forEach(function (src, i) {
     var t = document.createElement("div"); t.className = "tile";
-    var img = document.createElement("img"); img.loading = "lazy"; img.alt = "Photo " + (i + 1);
-    img.onload = function () { t.classList.add("loaded"); };
-    img.onerror = function () { t.className = "tile err"; t.innerHTML = "Photo " + (i + 1) + " could not load.<br>The link may have expired."; };
-    img.src = src;
+    var img = document.createElement("img"); img.alt = "Photo " + (i + 1);
+    queue.push({ img: img, tile: t, src: src, n: i + 1, tries: 0 });
     var cap = document.createElement("div"); cap.className = "cap";
     cap.innerHTML = "<span>Photo " + (i + 1) + " of " + photos.length + "</span><span class='zoom'>View ⤢</span>";
     t.appendChild(img); t.appendChild(cap);
     t.onclick = function () { if (!t.classList.contains("err")) open(i); };
     grid.appendChild(t);
 
-    var s = document.createElement("img"); s.src = src; s.alt = ""; s.loading = "lazy";
+    var s = document.createElement("img"); s.alt = ""; s.setAttribute("data-src", src);
     s.onclick = function () { cur = i; show(); };
     strip.appendChild(s);
   });
+  pump();
+}
+
+// ---- Load photos 2 at a time, with retries (SharePoint can refuse many downloads at once) ----
+var queue = [], active = 0, MAX_ACTIVE = 2, MAX_TRIES = 4;
+function pump() {
+  while (active < MAX_ACTIVE && queue.length) loadOne(queue.shift());
+}
+function loadOne(job) {
+  active++;
+  var done = false;
+  var timer = setTimeout(function () { fail(); }, 45000);
+  function finish() { if (done) return; done = true; clearTimeout(timer); active--; pump(); }
+  function fail() {
+    if (done) return;
+    job.tries++;
+    if (job.tries < MAX_TRIES) {
+      finish();
+      setTimeout(function () { queue.unshift(job); pump(); }, 1500 * job.tries);
+    } else {
+      job.tile.className = "tile err";
+      job.tile.innerHTML = "Photo " + job.n + " could not load.<br>Reload the page to try again.";
+      finish();
+    }
+  }
+  job.img.onload = function () { job.tile.classList.add("loaded"); finish(); };
+  job.img.onerror = fail;
+  job.img.src = job.tries ? job.src + "&retry=" + job.tries : job.src;
 }
 
 function show() {
@@ -184,9 +210,13 @@ function show() {
   lbWrap.style.bottom = multi ? "96px" : "0";
   Array.prototype.forEach.call(strip.children, function (el, j) { el.classList.toggle("cur", j === cur); });
   var c = strip.children[cur]; if (c && c.scrollIntoView) c.scrollIntoView({ block: "nearest", inline: "center" });
-  if (multi) [cur + 1, cur - 1].forEach(function (j) { var p = new Image(); p.src = photos[(j + photos.length) % photos.length]; });
+  if (multi && !queue.length && !active) [cur + 1, cur - 1].forEach(function (j) { var p = new Image(); p.src = photos[(j + photos.length) % photos.length]; });
 }
-function open(i) { cur = i; lb.classList.add("on"); show(); }
+function open(i) {
+  cur = i; lb.classList.add("on");
+  Array.prototype.forEach.call(strip.children, function (el) { var d = el.getAttribute("data-src"); if (d && !el.src) el.src = d; });
+  show();
+}
 function close() { lb.classList.remove("on"); lbImg.src = ""; }
 function step(d) { cur = (cur + d + photos.length) % photos.length; show(); }
 function zoom() { lbWrap.classList.toggle("zoom"); }
