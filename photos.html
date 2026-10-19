@@ -135,7 +135,15 @@ function readHash() {
   return out;
 }
 // A SharePoint "anyone" link opens a viewer page; adding download=1 returns the photo file itself.
+// Short links look like https://tenant.sharepoint.com/:i:/s/SITE/TOKEN?e=...
+// They redirect and set a cookie, which browsers block when a photo is embedded in another site.
+// download.aspx?share=TOKEN streams the file directly, with no redirect or cookie.
 function fileUrl(link) {
+  var m = link.match(/^(https:\/\/[^\/]+)\/:[a-z]:\/(s|t)\/([^\/]+)\/([^?#\/]+)/i);
+  if (m) {
+    var base = m[1] + (m[2].toLowerCase() === "t" ? "/teams/" : "/sites/") + m[3];
+    return base + "/_layouts/15/download.aspx?share=" + m[4];
+  }
   if (/download=1/i.test(link)) return link;
   return link + (link.indexOf("?") >= 0 ? "&" : "?") + "download=1";
 }
